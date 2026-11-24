@@ -1,38 +1,59 @@
-"""Hisn's three tools: asset lookup, runbook search, related-alert count. You write this file."""
-from __future__ import annotations
+"""Read-only lookups for the Hisn triage loop."""
 
-from hisn.retrieval import search_runbooks  # re-exported: tests import it from here too
+import json
+from datetime import datetime, timedelta
+from inspect import Parameter, signature
+from pathlib import Path
 
-__all__ = ["lookup_asset", "related_alerts", "search_runbooks", "TOOLS", "TOOL_SCHEMAS"]
+from hisn.retrieval import search_runbooks
+
+DATA = Path(__file__).parent / "data"
 
 
 def lookup_asset(host: str) -> dict:
-    """Owner, criticality and environment of a host.
-
-    Match ignoring case and surrounding spaces. Known host: the asset's fields (from
-    hisn/data/assets.json) plus `"known": True`. Unknown host: `{"host": host, "known": False}`.
-    """
-    raise NotImplementedError
+    """Look up a host's owner, criticality and environment."""
+    key = host.strip().casefold()
+    for asset in json.loads((DATA / "assets.json").read_text(encoding="utf-8")):
+        if asset["host"].casefold() == key:
+            return {**asset, "known": True}
+    return {"host": host, "known": False}
 
 
 def related_alerts(rule_id: str, agent: str, around: str, window_minutes: int = 60) -> dict:
-    """Count alerts with the same rule on the same agent in the window before a time.
+    """Find alerts on the same agent and rule in the inclusive preceding time window."""
+    if type(window_minutes) is not int or not 1 <= window_minutes <= 1440:
+        raise ValueError("window_minutes must be an integer between 1 and 1440")
+    utc_format = "%Y-%m-%dT%H:%M:%SZ"
+    end = datetime.strptime(around, utc_format)
+    start = end - timedelta(minutes=window_minutes)
+    host = agent.strip().casefold()
+    ids = []
+    with (DATA / "alerts.jsonl").open(encoding="utf-8") as stream:
+        for line in stream:
+            alert = json.loads(line)
+            if str(alert["rule"]["id"]) != str(rule_id) or alert["agent"]["name"].strip().casefold() != host:
+                continue
+            if start <= datetime.strptime(alert["timestamp"], utc_format) <= end:
+                ids.append(alert["id"])
+    return {"count": len(ids), "alert_ids": ids}
 
-    Alerts from hisn/data/alerts.jsonl with the same `rule.id` and `agent.name` (agent compared
-    ignoring case), with `around - window_minutes <= timestamp <= around` (both ends inclusive).
-    Returns `{"count": int, "alert_ids": [...]}` in file order.
-    `ValueError` unless `1 <= window_minutes <= 1440`.
-    """
-    raise NotImplementedError
+
+TOOLS = {tool.__name__: tool for tool in (lookup_asset, search_runbooks, related_alerts)}
 
 
-# You write these two:
-#
-# TOOLS: dict mapping each tool's name to the Python function above (plus search_runbooks from
-#        retrieval.py), so the agent loop can call `TOOLS[name](**arguments)`.
-# TOOL_SCHEMAS: a list of three dicts {"name", "description", "input_schema"}, one per tool, in
-#        the same shape `hisn/server.py` and the agent loop expect: `input_schema` is a JSON
-#        Schema object with "type": "object", "properties", "required" and
-#        "additionalProperties": False. Parameter types are only "string" or "integer".
-TOOLS: dict = {}
-TOOL_SCHEMAS: list = []
+def _schema(tool) -> dict:
+    parameters = signature(tool).parameters
+    types = {str: "string", int: "integer"}
+    return {
+        "name": tool.__name__,
+        "description": tool.__doc__,
+        "input_schema": {
+            "type": "object",
+            "properties": {name: {"type": types[p.annotation]} for name, p in parameters.items()},
+            "required": [name for name, p in parameters.items() if p.default is Parameter.empty],
+            "additionalProperties": False,
+        },
+    }
+
+
+TOOL_SCHEMAS = [_schema(tool) for tool in TOOLS.values()]
