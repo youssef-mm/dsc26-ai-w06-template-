@@ -1,0 +1,26 @@
+[
+ {
+  "host": "web-01",
+  "owner": "Nile Retail",
+  "criticality": "high",
+  "env": "production"
+ },
+ {
+  "host": "db-02",
+  "owner": "Delta Hospital",
+  "criticality": "critical",
+  "env": "production"
+ },
+ {
+  "host": "dev-07",
+  "owner": "Nile Retail",
+  "criticality": "low",
+  "env": "development"
+ },
+ {
+  "host": "hr-laptop-12",
+  "owner": "Delta Hospital",
+  "criticality": "medium",
+  "env": "corporate"
+ }
+]
